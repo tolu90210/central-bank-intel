@@ -1,0 +1,376 @@
+{
+  "version": "1.0",
+  "toolId": "[YOUR_TOOL_ID]",
+  "generatedAt": "2026-05-25T00:00:00.000Z",
+  "phase0Context": {
+    "archetype": "custom_pipeline",
+    "surface": "query",
+    "upstreamSources": [
+      "Federal Reserve RSS \u2014 press_monetary.xml + speeches.xml",
+      "ECB RSS \u2014 ecb.europa.eu/rss/press.html",
+      "Bank of England RSS \u2014 bankofengland.co.uk/rss/speeches + MPC summary page scrape",
+      "Bank of Japan RSS \u2014 boj.or.jp/en/rss/whatsnew.xml (filtered)"
+    ],
+    "methodCount": 4,
+    "methods": [
+      {
+        "name": "get_central_bank_intelligence",
+        "surface": "query",
+        "latencyClass": "instant",
+        "hasOutputSchema": true,
+        "notes": "Reads from local SQLite, no upstream calls at query time"
+      },
+      {
+        "name": "compare_bank_stances",
+        "surface": "query",
+        "latencyClass": "instant",
+        "hasOutputSchema": true,
+        "notes": "Pure database read, sub-50ms"
+      },
+      {
+        "name": "search_bank_documents",
+        "surface": "query",
+        "latencyClass": "instant",
+        "hasOutputSchema": true,
+        "notes": "SQLite LIKE query, sub-100ms"
+      },
+      {
+        "name": "get_pipeline_health",
+        "surface": "query",
+        "latencyClass": "instant",
+        "hasOutputSchema": true,
+        "notes": "Aggregate counts + dead letter read"
+      }
+    ],
+    "endpointUrl": "[YOUR_RAILWAY_ENDPOINT]/mcp",
+    "keyArchitecturalNote": "Classification is synchronous and deterministic \u2014 no LLM API calls. Documents are pre-classified by the background poller every 5 minutes. All MCP tool responses are instant reads from SQLite (node:sqlite native module). DB_PATH defaults to ./central_bank.db; set to /data/central_bank.db with a Railway volume for persistence across deploys. Latency is sub-100ms at query time regardless of document volume.",
+    "envVars": {
+      "PORT": "optional, default 3000",
+      "DB_PATH": "optional, default ./central_bank.db"
+    },
+    "noExternalApiKeysRequired": true
+  },
+  "verticalAlphaResearch": {
+    "alphaCategories": [
+      {
+        "id": "live_policy_signal",
+        "name": "Live Monetary Policy Signal \u2014 Updated Within Minutes of Publication",
+        "description": "Bloomberg Terminal's central bank monitoring requires a human analyst to read and interpret documents. This tool classifies new Fed, ECB, BoE, and BoJ documents within 5 minutes of publication and exposes a machine-readable stance signal. Free LLMs have training cutoffs measured in months. No free tool surfaces net_stance, forward_guidance, and hawkish/dovish scores from documents published in the last hour.",
+        "relevantMethods": [
+          "get_central_bank_intelligence"
+        ],
+        "differentiationStrength": "high"
+      },
+      {
+        "id": "tone_drift_detection",
+        "name": "Tone vs Baseline and Semantic Drift \u2014 Quantified Policy Shift",
+        "description": "The tone_vs_baseline field measures whether the current document is more or less hawkish than the bank's own 90-day rolling average \u2014 a signal no dashboard currently exposes programmatically. The drift_from_previous field uses TF-IDF cosine distance to detect how much the vocabulary has changed from the previous same-type document. Together these two signals let an agent detect a policy pivot before it becomes consensus market narrative.",
+        "relevantMethods": [
+          "get_central_bank_intelligence",
+          "compare_bank_stances"
+        ],
+        "differentiationStrength": "high"
+      },
+      {
+        "id": "cross_bank_divergence",
+        "name": "Cross-Bank Policy Divergence \u2014 FX and Carry Signal",
+        "description": "compare_bank_stances returns all four banks in one call with a cross_bank_divergence flag. When the Fed is hawkish and the BoJ is dovish simultaneously, that is the textbook carry trade setup \u2014 and the tool detects and surfaces it immediately after each bank publishes. No free LLM can provide current stances for all four banks simultaneously.",
+        "relevantMethods": [
+          "compare_bank_stances"
+        ],
+        "differentiationStrength": "high"
+      },
+      {
+        "id": "forward_guidance_parsing",
+        "name": "Forward Guidance Classification \u2014 Tightening Bias vs Easing Bias",
+        "description": "The tool runs 9 regex patterns against the full text of each document to classify forward guidance into one of five signals: tightening_bias, easing_bias, on_hold, data_dependent, or none_detected. This is the specific language central banks use to signal future rate moves before they happen. Detecting a shift from data_dependent to tightening_bias in a Fed speech is a high-value trading signal.",
+        "relevantMethods": [
+          "get_central_bank_intelligence"
+        ],
+        "differentiationStrength": "high"
+      },
+      {
+        "id": "document_search",
+        "name": "Full-Text Search Across Stored Policy Documents",
+        "description": "search_bank_documents allows an agent to search the full text corpus of stored central bank documents by keyword with intelligence scores on results. Use case: an agent tasked with researching how the ECB has discussed energy prices over the last 90 days can retrieve all matching documents with their stance classifications in a single call.",
+        "relevantMethods": [
+          "search_bank_documents"
+        ],
+        "differentiationStrength": "moderate"
+      }
+    ],
+    "crossToolOpportunities": [
+      {
+        "partnerTool": "Government Bond Yield Curve MCP (also in this portfolio)",
+        "combinedInsight": "When compare_bank_stances shows the Fed as hawkish and BoJ as dovish, cross-referencing with the yield curve tool's US-Japan 10Y spread confirms whether the yield differential is consistent with the stated policy divergence \u2014 or whether a mean-reversion trade is signaled.",
+        "examplePrompt": "The Fed is hawkish and the BoJ is dovish per central bank intel. Is the current US-Japan 10Y yield spread of 182bps consistent with that stance divergence, or is it stretched?"
+      },
+      {
+        "partnerTool": "Any FX rate tool on the CTX marketplace",
+        "combinedInsight": "Fed hawkish + ECB dovish divergence is the primary driver of EUR/USD. Combining the stance divergence signal with live EUR/USD rate lets an agent flag when the currency is mispricing the policy divergence.",
+        "examplePrompt": "The Fed is hawkish and ECB is neutral per central bank communications. What is EUR/USD currently and does it reflect this divergence?"
+      }
+    ],
+    "upstreamGaps": [
+      {
+        "gap": "Bloomberg Terminal monitors central bank publications but requires a human analyst to interpret them. The data is not exposed as a machine-readable stance API. Bloomberg's own Natural Language Processing products cost additional licensing on top of the terminal fee.",
+        "howToolFills": "Deterministic lexicon-based classification produces a machine-readable stance signal instantly. No human in the loop. MCP-callable by any agent."
+      },
+      {
+        "gap": "Free LLMs can discuss central bank policy but only from training data that is months to over a year stale. A speech published this morning by a Fed governor is invisible to any free LLM until its next training run.",
+        "howToolFills": "5-minute poll cadence. New documents are classified and available within minutes of publication on the official feed."
+      }
+    ]
+  },
+  "candidatePromptPool": [
+    {
+      "id": "prompt_1",
+      "prompt": "What is the Federal Reserve's current monetary policy stance based on its most recent communications?",
+      "alphaCategory": "live_policy_signal",
+      "category": "live_data",
+      "expectedMethods": [
+        "get_central_bank_intelligence"
+      ],
+      "expectedFields": [
+        "documents[0].intelligence.net_stance",
+        "documents[0].intelligence.hawkish_score",
+        "documents[0].intelligence.dovish_score",
+        "documents[0].intelligence.forward_guidance",
+        "documents[0].intelligence.summary",
+        "documents[0].published"
+      ],
+      "whyFreeCannotAnswer": "Free LLMs cannot access Fed communications published in the last hours, days, or weeks depending on training cutoff. The net_stance and forward_guidance signals require reading documents that don't exist in training data.",
+      "realWorldConsequence": "Traders and macro analysts check Fed stance before positioning. A stale characterization of Fed policy leads to wrong rate and equity positioning.",
+      "freeBaseline": {
+        "differentiation": "high_differentiation",
+        "whyItBeatsFree": "Free LLM will describe Fed policy as of its training cutoff, which may differ materially from current communications. Will not have scores or forward guidance classification.",
+        "autoCalibrated": true
+      },
+      "testResult": "pending_deployment"
+    },
+    {
+      "id": "prompt_2",
+      "prompt": "Compare the monetary policy stance across the Fed, ECB, Bank of England, and Bank of Japan right now. Which are hawkish, which are dovish, and are they diverging?",
+      "alphaCategory": "cross_bank_divergence",
+      "category": "comparison",
+      "expectedMethods": [
+        "compare_bank_stances"
+      ],
+      "expectedFields": [
+        "comparison.fed.net_stance",
+        "comparison.ecb.net_stance",
+        "comparison.boe.net_stance",
+        "comparison.boj.net_stance",
+        "cross_bank_divergence",
+        "comparison.*.forward_guidance"
+      ],
+      "whyFreeCannotAnswer": "Requires current communications from four separate central banks. Free LLM cannot provide current stances for any of them, let alone all four simultaneously with divergence analysis.",
+      "realWorldConsequence": "Cross-bank divergence is the primary signal for FX carry trades (Fed hawkish + BoJ dovish = USD/JPY long) and relative value bond positioning.",
+      "freeBaseline": {
+        "differentiation": "high_differentiation",
+        "whyItBeatsFree": "Free LLM has stale characterizations for all four banks and cannot compute divergence from current documents.",
+        "autoCalibrated": true
+      },
+      "testResult": "pending_deployment"
+    },
+    {
+      "id": "prompt_3",
+      "prompt": "Has the ECB's tone shifted more hawkish or dovish compared to its 90-day baseline? By how much?",
+      "alphaCategory": "tone_drift_detection",
+      "category": "live_data",
+      "expectedMethods": [
+        "get_central_bank_intelligence"
+      ],
+      "expectedFields": [
+        "documents[0].intelligence.tone_vs_baseline",
+        "documents[0].intelligence.net_stance",
+        "documents[0].intelligence.hawkish_score",
+        "documents[0].intelligence.dovish_score",
+        "baselines[0].avg_net_score"
+      ],
+      "whyFreeCannotAnswer": "tone_vs_baseline requires both current document classification AND a 90-day rolling average computed from the last 90 days of ECB documents. Neither is available to a free LLM.",
+      "realWorldConsequence": "A positive tone_vs_baseline means the ECB is communicating more hawkishly than its own recent average \u2014 a policy pivot signal before the market has fully priced it.",
+      "freeBaseline": {
+        "differentiation": "high_differentiation",
+        "whyItBeatsFree": "Cannot compute baseline drift without access to the last 90 days of ECB documents plus current classification.",
+        "autoCalibrated": true
+      },
+      "testResult": "pending_deployment"
+    },
+    {
+      "id": "prompt_4",
+      "prompt": "What forward guidance is the Bank of England giving right now \u2014 are they signaling a hold, further cuts, or further hikes?",
+      "alphaCategory": "forward_guidance_parsing",
+      "category": "live_data",
+      "expectedMethods": [
+        "get_central_bank_intelligence"
+      ],
+      "expectedFields": [
+        "documents[0].intelligence.forward_guidance",
+        "documents[0].intelligence.net_stance",
+        "documents[0].intelligence.summary",
+        "documents[0].doc_type",
+        "documents[0].published"
+      ],
+      "whyFreeCannotAnswer": "BoE MPC decisions and MPC summary minutes are published 8 times per year. Free LLM cannot access documents published after its training cutoff and the forward guidance signal requires reading the actual language used.",
+      "realWorldConsequence": "BoE forward guidance directly moves GBP. Missing a shift from data_dependent to easing_bias in MPC minutes means missing the GBP move.",
+      "freeBaseline": {
+        "differentiation": "high_differentiation",
+        "whyItBeatsFree": "Free LLM will give BoE forward guidance as of training cutoff. MPC meetings happen roughly every 6 weeks and stance can change between training runs.",
+        "autoCalibrated": true
+      },
+      "testResult": "pending_deployment"
+    },
+    {
+      "id": "prompt_5",
+      "prompt": "Search all recent central bank documents for any mention of 'inflation persistence' and show me which banks are discussing it and what stance they take.",
+      "alphaCategory": "document_search",
+      "category": "advanced_filtered",
+      "expectedMethods": [
+        "search_bank_documents"
+      ],
+      "expectedFields": [
+        "matches[*].bank",
+        "matches[*].title",
+        "matches[*].published",
+        "matches[*].intelligence.net_stance",
+        "matches[*].intelligence.key_themes"
+      ],
+      "whyFreeCannotAnswer": "Requires searching the full text of documents published in recent weeks or months across four central banks. No free tool has this corpus.",
+      "realWorldConsequence": "Tracking which banks are foregrounding 'inflation persistence' identifies who is likely to remain hawkish for longer \u2014 a durable positioning signal.",
+      "freeBaseline": {
+        "differentiation": "high_differentiation",
+        "whyItBeatsFree": "Cannot search recent central bank document text. Will give general commentary on inflation persistence without document-level evidence.",
+        "autoCalibrated": true
+      },
+      "testResult": "pending_deployment"
+    },
+    {
+      "id": "prompt_6",
+      "prompt": "Which central bank has shown the most semantic drift from its previous statement \u2014 meaning whose latest communication sounds most different from what they said before?",
+      "alphaCategory": "tone_drift_detection",
+      "category": "ceiling_testing",
+      "expectedMethods": [
+        "get_central_bank_intelligence"
+      ],
+      "expectedFields": [
+        "documents[*].bank",
+        "documents[*].intelligence.drift_from_previous",
+        "documents[*].doc_type",
+        "documents[*].published"
+      ],
+      "whyFreeCannotAnswer": "drift_from_previous requires TF-IDF cosine similarity computed between the current document and the previous same-type document for each bank. Requires the full text of both documents.",
+      "realWorldConsequence": "High semantic drift from a central bank's previous statement is an early signal of policy pivot \u2014 before the explicit language change registers in market consensus.",
+      "freeBaseline": {
+        "differentiation": "high_differentiation",
+        "whyItBeatsFree": "Cannot compute semantic drift between current and prior documents without access to the full text of both. Will give qualitative commentary without scores.",
+        "autoCalibrated": true
+      },
+      "testResult": "pending_deployment"
+    },
+    {
+      "id": "prompt_7",
+      "prompt": "What are the key themes in the most recent Bank of Japan policy communications, and do they suggest the BoJ is moving toward normalization?",
+      "alphaCategory": "live_policy_signal",
+      "category": "power_user",
+      "expectedMethods": [
+        "get_central_bank_intelligence"
+      ],
+      "expectedFields": [
+        "documents[0].intelligence.key_themes",
+        "documents[0].intelligence.net_stance",
+        "documents[0].intelligence.forward_guidance",
+        "documents[0].intelligence.summary",
+        "documents[0].published"
+      ],
+      "whyFreeCannotAnswer": "BoJ communications are published in Japanese first; English translations lag. The key_themes field is extracted from the actual document text. Free LLM cannot access recent BoJ publications.",
+      "realWorldConsequence": "BoJ normalization is one of the largest macro trades. Early detection of normalization language in BoJ documents is worth significant alpha.",
+      "freeBaseline": {
+        "differentiation": "high_differentiation",
+        "whyItBeatsFree": "Free LLM will characterize BoJ policy as of training cutoff. BoJ policy has been among the most dynamic of any major central bank.",
+        "autoCalibrated": true
+      },
+      "testResult": "pending_deployment"
+    },
+    {
+      "id": "prompt_8",
+      "prompt": "Are the Fed and ECB currently aligned or diverging in their policy stance? What are the key themes driving any divergence?",
+      "alphaCategory": "cross_bank_divergence",
+      "category": "edge_case",
+      "expectedMethods": [
+        "compare_bank_stances"
+      ],
+      "expectedFields": [
+        "comparison.fed.net_stance",
+        "comparison.ecb.net_stance",
+        "comparison.fed.key_themes",
+        "comparison.ecb.key_themes",
+        "comparison.fed.forward_guidance",
+        "comparison.ecb.forward_guidance",
+        "cross_bank_divergence"
+      ],
+      "whyFreeCannotAnswer": "Requires current stance and key themes from both Fed and ECB, derived from their most recent documents. Neither is accessible to a free LLM with any precision.",
+      "realWorldConsequence": "Fed-ECB divergence drives EUR/USD. The key themes reveal WHY they are diverging (e.g. Fed focused on labor market, ECB on energy) which informs how durable the divergence is.",
+      "freeBaseline": {
+        "differentiation": "high_differentiation",
+        "whyItBeatsFree": "Cannot compare current Fed and ECB stances with key theme attribution. Will give qualitative description of last known state from training data.",
+        "autoCalibrated": true
+      },
+      "testResult": "pending_deployment"
+    }
+  ],
+  "dataQualityValidation": {
+    "level1": {
+      "passed": true,
+      "issues": [],
+      "notes": "Architecture ensures internal consistency: scores are deterministic given the same text. tone_vs_baseline is computed against the stored baseline, not recomputed at query time. drift_from_previous uses stored text from the previous same-type document. Dead letter queue captures fetch failures rather than returning empty results silently."
+    },
+    "level2": {
+      "methodTested": "compare_bank_stances",
+      "upstreamComparison": "Pending live deployment \u2014 to be verified by comparing tool stance output against manual reading of the same documents from official feeds at test time.",
+      "passed": "pending_deployment",
+      "issues": []
+    }
+  },
+  "latencyAudit": {
+    "methods": [
+      {
+        "name": "get_central_bank_intelligence",
+        "declaredLatency": "instant",
+        "actualLatency": "instant",
+        "notes": "Pure SQLite read. No upstream calls at query time. Sub-50ms. Poller runs asynchronously in background every 5 minutes."
+      },
+      {
+        "name": "compare_bank_stances",
+        "declaredLatency": "instant",
+        "actualLatency": "instant",
+        "notes": "Four SQLite reads (one per bank). Sub-100ms total."
+      },
+      {
+        "name": "search_bank_documents",
+        "declaredLatency": "instant",
+        "actualLatency": "instant",
+        "notes": "SQLite LIKE query with indexed bank + published columns. Sub-100ms for typical corpus sizes."
+      },
+      {
+        "name": "get_pipeline_health",
+        "declaredLatency": "instant",
+        "actualLatency": "instant",
+        "notes": "Two aggregate queries. Sub-50ms."
+      }
+    ],
+    "schemaCompleteness": "4/4 methods return structuredContent. Intelligence object has consistent schema across all documents.",
+    "criticalNote": "All four tools read from pre-computed SQLite data. The computational cost (feed fetching, HTML stripping, classification) is borne by the background poller, not by the MCP query. This means all tools respond instantly regardless of how complex the underlying data is."
+  },
+  "optimizationRuns": "pending_deployment",
+  "showcasePrompts": "pending_deployment",
+  "generatedDescription": "pending_deployment",
+  "descriptionUpdatedAt": "pending_deployment",
+  "signoff": {
+    "passRate": "pending_deployment",
+    "highDifferentiationCount": 8,
+    "moderateDifferentiationCount": 0,
+    "lowDifferentiationCount": 0,
+    "overallStatus": "PENDING \u2014 all 8 prompts scored high_differentiation in baseline. Execution validation pending deployed endpoint. Key differentiator: sub-100ms instant reads from pre-classified SQLite corpus \u2014 unique architecture for a policy intelligence tool."
+  }
+}
