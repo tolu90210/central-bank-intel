@@ -1,4 +1,4 @@
-# central-bank-intel-mcp
+# central-bank-intel
 
 Automated monetary policy intelligence for the Federal Reserve, ECB, Bank of England, and Bank of Japan. Polls official RSS feeds and pages every 5 minutes, classifies each document with a deterministic hawkish/dovish lexicon, detects forward guidance signals, and computes tone drift — all without an LLM API call. All MCP tools respond from pre-classified SQLite data at sub-100ms latency.
 
