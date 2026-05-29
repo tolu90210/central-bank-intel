@@ -66,6 +66,14 @@ export const FORWARD_GUIDANCE_PATTERNS: Array<{
   { pattern: /data.{0,20}dependent|meeting.{0,10}meeting|monitor.{0,20}(data|development)/i, signal: "data_dependent" },
   { pattern: /depend(s|ing) on (the |incoming |economic )?data/i, signal: "data_dependent" },
   { pattern: /if (the )?(outlook|conditions?|data) (change|warrant|require)/i, signal: "data_dependent" },
+  { pattern: /carefully assess.{0,40}(incoming|evolving|data|outlook)/i, signal: "data_dependent" },
+  { pattern: /assess.{0,20}incoming data/i, signal: "data_dependent" },
+  { pattern: /evolving (economic )?outlook/i, signal: "data_dependent" },
+  { pattern: /balance of risks/i, signal: "data_dependent" },
+  { pattern: /incoming (economic |macro)?data/i, signal: "data_dependent" },
+  { pattern: /proceed (carefully|cautiously|gradually)/i, signal: "data_dependent" },
+  { pattern: /two.{0,10}sided risks?/i, signal: "data_dependent" },
+  { pattern: /uncertainty (remains?|is elevated|warrants?)/i, signal: "data_dependent" },
 ];
 
 // Common English + finance stopwords to exclude from theme extraction

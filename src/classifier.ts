@@ -8,8 +8,10 @@ function scoreText(text: string, lexicon: Record<string, number>): { score: numb
   const wordCount = Math.max(lower.split(/\s+/).length, 1);
   const hits: TermHit[] = [];
   for (const [term, weight] of Object.entries(lexicon)) {
-    let count = 0, pos = 0;
-    while ((pos = lower.indexOf(term, pos)) !== -1) { count++; pos += term.length; }
+    // Word-boundary regex prevents substring false positives:
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re      = new RegExp(`\\b${escaped}\\b`, "gi");
+    const count   = (lower.match(re) ?? []).length;
     if (count > 0) hits.push({ term, weight, count });
   }
   const raw = hits.reduce((sum, h) => sum + h.weight * h.count, 0);
